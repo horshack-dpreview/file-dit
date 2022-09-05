@@ -10,7 +10,7 @@ Download the script by right-clicking on [file-dit.sh](https://raw.githubusercon
 Example: `./file-dit.sh -d /mnt/mydrive`
 
 ## Sample Output
-    $ sudo ./file-dit.sh -d /mnt/mydisk/ -p 5 -b 1G -m 64K -m 1M
+    $ sudo ./file-dit.sh -d /mnt/mydisk/ -p 5 -b 1G -m 64K -M 1M
     Test directory: "/mnt/mydisk/tmp.Cfh2wfETWd_file-dit"
     Press 'q' to quit - will exit after completion of current pass
     Pass: 5 of 5
