@@ -1,5 +1,5 @@
 # file-dit
-Utility for performing data integrity testing of a device/filesystem.  This is achieved by generating a set of randomly-sized files with random data content, calculates a hash of each file, then reading the files back to verify the hash. The utility can be configured to run indefinitely (until terminated) or for a fixed number of passes. You can also control the minimum/maximum randomized size for each file and the total amount of data to generate per pass.
+Utility for performing data integrity testing of a device/filesystem.  This is achieved by generating a set of randomly-sized files with random data content, calculating a hash of each file, then reading the files back to verify the hash. The utility can be configured to run indefinitely (until terminated) or for a fixed number of passes. You can also control the minimum/maximum randomized size for each file and the total amount of data generated per pass.
 
 ## Installation
 Download the script by right-clicking on [file-dit.sh](https://raw.githubusercontent.com/horshack-dpreview/file-dit/main/file-dit.sh) and choosing "Save Link As..." After downloading, make it executable via "chmod +x file-dit.sh"
