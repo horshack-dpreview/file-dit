@@ -19,10 +19,9 @@ Example: `./file-dit.sh -d /mnt/mydrive`
 ## Tech Details
 Here is a brief theory of operation:
 
- 1. Creates a temporary directory on the filesystem path specified to test
- 2. Generates a set of files with randomly-generated data. Each file size is randomly selected, and the number of files created is determined by the the amount of data the utility is configured to generate per pass. Each file is first written to a ram-based filesystem (/dev/shm), after which a hash of the file is calculated (SHA1) and the file is moved to the filesystem under test. The reason for using a ram-based filesystem as an intermediate step is to assure we generate a hash with known-correct data, ie not relying on the filesystem under test to provide correct data on the read-back for the initial SHA1 hash generation. `sync` is performed after all the files have been generated in a given pass
- 3. Verify the set of files generated from the previous step by re-calculating their hash and comparing it against the hash calculated when the files were first written. Prior to starting the verification step the system's filesystem page cache is invalidated, to assure the underlying storage media is accessed for the verification step. 
- 4. Loop back to repeat the process until the user-configured number of passes (or indefinitely if specified).
+ 1. Generates a set of files with randomly-generated data. Each file size is randomly selected, and the number of files created is determined by the the amount of data the utility is configured to generate per pass. Each file is first written to a ram-based filesystem (/dev/shm), after which a hash of the file is calculated (SHA1) and the file is moved to the filesystem under test. The reason for using a ram-based filesystem as an intermediate step is to assure we generate a hash with known-correct data, ie not relying on the filesystem under test to provide correct data on the read-back for the initial SHA1 hash generation. `sync` is performed after all the files have been generated in a given pass
+ 2. Verify the set of files generated from the previous step by re-calculating their hash and comparing it against the hash calculated when the files were first written. Prior to starting the verification step the system's filesystem page cache is invalidated, to assure the underlying storage media is accessed for the verification step. 
+ 3. Loop back to repeat the process until the user-configured number of passes (or indefinitely if specified).
 
 If a mismatch is found the expected and actual hash values are displayed.
 
