@@ -308,18 +308,15 @@ function calcXferRateAsSizeStr() {
 }
 
 #
-# Deletes all files specified in an array
+# Deletes all files in a directory (non-recursive)
 #
 # Arguments:
-#   $1 - Array of filenames corresponding to files to delete
+#   $1 - Directory to delete files from
 # Returns:
 #
-function deleteFiles() {
-
-    local -n df_fileNames=$1
-
-    rm "${df_fileNames[@]}"
-
+function deleteFilesInDir() {
+    local dir=$1
+    find "$dir" -maxdepth 1 -delete
 }
 
 #
@@ -570,7 +567,7 @@ for (( passNumber=0; passCount==0 || passNumber<passCount; passNumber++ )); do
     #
     # delete all the temporary files we created this pass
     #
-    deleteFiles fileNames
+    deleteFilesInDir "$testDir"
 
     # keep a running tally of the number of files and bytes we've tested
     ((totalBytesAllFiles += totalFileBytesThisPass))
