@@ -12,9 +12,9 @@ set -u
 FALSE=0
 TRUE=1
 APP_NAME="file-dit"
-HASH_APP="sha1sum"
 CONVERT_BYTES_TO_SIZE_STR_FMT_ROUNDED_WITH_PAD="%8.2f"
 CONVERT_BYTES_TO_SIZE_STR_FMT_ROUNDED="%.2f"
+TEST_FILENAME_SUFFIX="_${APP_NAME}_$$"
 
 #
 # default parameters
@@ -35,11 +35,31 @@ gTestDir=""
 gTempMemoryFilesystemDir=""
 
 #
-# clears the kernel page cache
+# clears the entire kernel pagecache (routine not presently used)
 #
 function clearPageCache() {
-    if ! echo 1 > /proc/sys/vm/drop_caches; then
-        echo "Error: Clearing drop_caches failed"
+    if ! echo 1 | sed --quiet 'w /proc/sys/vm/drop_caches'; then
+        echo "Error: Clearing drop_caches failed - did you run with sudo?"
+        exitScript 1
+    fi
+}
+
+#
+# Clears the pagecache for a file. This is done before reading/verifying
+# a file to make sure its read from the device rather than out of cache
+#
+# Arguments:
+#   $1 - Filename to clear pagecache for
+# Returns:
+#   retVal - SHA1 has of file
+#
+function clearPageCacheForFile() {
+    local   filename=$1
+    local   cmdOutput
+    # https://unix.stackexchange.com/a/162806/557230
+    if ! cmdOutput=$(dd of="$filename" oflag=nocache conv=notrunc,fdatasync count=0 2>&1); then
+        echo "dd command to clear pagecache for file ${filename} failed"
+        echo "$cmdOutput"
         exitScript 1
     fi
 }
@@ -55,12 +75,14 @@ function clearPageCache() {
 function genHashForFile() {
 
     local   filename=$1
+    local   cmdOutput
 
-    if ! output=$("$HASH_APP" "$filename" 2>/dev/null); then
+    if ! cmdOutput=$("$HASH_APP" "$filename" 2>&1); then
         echo "Error performing sha1sum on ${filename}"
+        echo "$cmdOutput"
         exitScript 1
     fi
-    retVal=${output% *} # hash
+    retVal=${cmdOutput% *} # hash
 }
 
 #
@@ -77,9 +99,11 @@ function genRandomDataFile() {
     local tempPath=$1
     local sizeBytes=$2
     local tempFilename
+    local cmdOutput
 
-    if ! tempFilename=$(mktemp --tmpdir="$tempPath" --suffix="_$APP_NAME"); then
+    if ! tempFilename=$(mktemp --tmpdir="$tempPath" --suffix="$TEST_FILENAME_SUFFIX"); then
         echo "Error: Unable to create next temporary file"
+        echo "$tempFilename"
         exitScript 1
     fi
 
@@ -92,8 +116,9 @@ function genRandomDataFile() {
     #
     # This idea came from # https://superuser.com/a/793003/1694825
     #
-    if ! openssl enc -aes-256-ctr -pass pass:"$(dd if=/dev/urandom bs=128 count=1 2>/dev/null | base64)" -nosalt < /dev/zero 2>/dev/null | dd of="$tempFilename" bs="$sizeBytes" count=1 iflag=fullblock 2>/dev/null; then
+    if ! cmdOutput=$(dd of="$tempFilename" bs="$sizeBytes" count=1 iflag=fullblock 2>&1 < <(openssl enc -aes-256-ctr -pass pass:"$(dd if=/dev/urandom bs=128 count=1 2>/dev/null | base64)" -nosalt < /dev/zero 2>/dev/null)); then
         echo "dd file creation for ${tempFilename} failed"
+        echo "$cmdOutput"
         exitScript 1
     fi
     retVal=$tempFilename
@@ -140,6 +165,7 @@ genRandomFiles() {
     local maxSieThisIo bytesRemainingToGenerate fileNo fileNames hashes totalBytesAllFiles
     local tempFilename filename
     local startTime elapsedTime
+    local cmdOutput
 
     fileNames=()
     hashes=()
@@ -162,8 +188,9 @@ genRandomFiles() {
         genRandomDataFile "$tempFileDir" "$fileSize"; tempFilename=$retVal
         genHashForFile "$tempFilename"; hash=$retVal
         filename="$filePath/"${tempFilename##*/} # construst full path to where file will be stored on target disk
-        if ! mv "$tempFilename" "$filename" 2>/dev/null; then
+        if ! cmdOutput=$(mv "$tempFilename" "$filename" 2>&1); then
             echo "Error moving file from $tempFilename to $filePath"
+            echo "$cmdOutput"
             exitScript 1
         fi
         [[ $verbose -eq $TRUE ]] && echo "Created: ${filename}, Size: ${fileSize}, Hash: ${hash}"
@@ -203,6 +230,7 @@ function verifyHashes() {
 
         filename=${vh_fileNames[$fileNo]}
 
+        clearPageCacheForFile "$filename" # make sure we're getting data off media instead of from pagecache
         genHashForFile "$filename"; hash=$retVal
          if [[ $hash != ${vh_hashes[fileNo]} ]]; then
             countFilesMismatched=$((countFilesMismatched+1))
@@ -308,15 +336,22 @@ function calcXferRateAsSizeStr() {
 }
 
 #
-# Deletes all files in a directory (non-recursive)
+# Deletes all files in a directory (non-recursive). Note as a failsafe
+# we specifically only delete files that match a suffix we placed on files
+# we created, which is why we use "find" rather than rm/*
 #
 # Arguments:
 #   $1 - Directory to delete files from
 # Returns:
 #
 function deleteFilesInDir() {
-    local dir=$1
-    find "$dir" -maxdepth 1 -delete
+    local   dir=$1
+    local   cmdOutput
+    if ! cmdOutput=$(find "$dir" -maxdepth 1 -type f -name "*$TEST_FILENAME_SUFFIX" -delete); then
+        echo "Error deleting files in ${dir}"
+        echo "$cmdOutput"
+        # don't exit because we may be on an exit path already
+    fi
 }
 
 #
@@ -410,6 +445,19 @@ function processCommandLine() {
     verifyParamNumber "-m" "$minRandomFileSizeBytes" 1 "N/A"
     verifyParamNumber "-M" "$maxRandomFileSizeBytes" 1 "N/A"
 
+    if ((minRandomFileSizeBytes > bytesToGeneratePerPass)); then
+        echo "Minimum file size specified is > specified total size to generate per pass"
+        exitScript 1;
+    fi
+    if ((maxRandomFileSizeBytes > bytesToGeneratePerPass)); then
+        echo "Maximum file size specified is > specified total size to generate per pass"
+        exitScript 1;
+    fi
+    if ((minRandomFileSizeBytes > maxRandomFileSizeBytes)); then
+        echo "Warning: Minimum file size specified > maximum size specified. Swapping the two"
+        maxRandomFileSizeBytes=$minRandomFileSizeBytes
+    fi
+
     if [[ ! -d $testDirBase ]]; then
         echo "Error: Test directory (-d) \"${testDirBase}\" can't be accessed"
         exitScript 1
@@ -424,9 +472,18 @@ function processCommandLine() {
 # Performs necessary cleanup for exit, including removing any
 # temporary files we created
 #
+# Arguments:
+#   $1 - Exit code
+#
 function cleanupForExit() {
+    exitCode=$1
     if [[ -n $gTestDir ]]; then
-        rm -rf "$gTestDir"
+        if ((exitCode == 10)); then
+            # print cleanup message for ctrl-c exit
+            echo "Cleanup: Deleting temporary files in \"$gTestDir\""
+        fi
+        deleteFilesInDir "$gTestDir"
+        rmdir "$gTestDir"
     fi
     if [[ -n $gTempMemoryFilesystemDir ]]; then
         rm -rf "$gTempMemoryFilesystemDir"
@@ -437,8 +494,8 @@ function cleanupForExit() {
 # SIGINT handler. Deletes all test files
 #
 function trap_SIGINT() {
-    echo "<Ctrl-C> Pressed - Deleting temporary files \"$gTestDir\""
-    cleanupForExit
+    echo " <Ctrl-C> Pressed"
+    exitScript 10
 }
 
 #
@@ -459,10 +516,51 @@ function wasKeyPressed() {
 #
 # Exits script, performing any necessawry cleanup
 #
+# Arguments:
+#   $1 - Exit code
+#
 function exitScript() {
     local exitCode=$1
-    cleanupForExit
+    cleanupForExit $exitCode
     exit $exitCode
+}
+
+#
+# Checks if a given application is installed
+#
+# Arguments:
+#   $1 - Name of app
+# Returns:
+#   $? = 0 if app is installed, <> 0 otherwise
+#
+checkAppInstalled() {
+    toolName=$1
+    command -v "$toolName" &> /dev/null
+}
+
+#
+# Verifies a list of apps are installed. If any app(s) are not installed then
+# a list of the missing apps is presented to the user and the script is terminatd
+#
+# Arguments:
+#   $1 - Array containing names of apps
+# Returns:
+#
+verifyAppsInstalled() {
+    local appsList
+    local appsMissingList
+    local appName
+    appsList=("$@")
+    appsMissingList=()
+    for appName in "${appsList[@]}"; do
+        if ! checkAppInstalled "$appName"; then
+            appsMissingList+=("$appName")
+        fi
+    done
+    if [ ${#appsMissingList[@]} -gt 0 ]; then
+        echo "The following apps must be installed to run ${APP_NAME}: ${appsMissingList[@]}"
+        exitScript 1
+    fi
 }
 
 #
@@ -479,11 +577,15 @@ function exitScript() {
 processCommandLine "$@"
 
 #
-# make sure script is running with root privilege, which we need to
-# enable/disable cores
+# choose the hashing app that we'll be using to generate and check file data. Note
+# that xxhsum is approx 8x faster than sha1sum (for verifies)
 #
-if [[ $(id -u) -ne 0 ]]; then
-    echo "This script must be run with root privileges (root user or with 'sudo')"
+if checkAppInstalled "xxhsum"; then
+    HASH_APP="xxhsum"
+elif checkAppInstalled "sha1sum"; then
+    HASH_APP="sha1sum"
+else
+    echo "No hash utility available - please install either xxhsum or sha1sum"
     exitScript 1
 fi
 
@@ -510,7 +612,7 @@ echo "Press 'q' to quit - will exit after completion of current pass"
 totalBytesAllFiles=0
 totalFileCount=0
 totalFileMismatches=0
-trap trap_SIGINT INT
+trap trap_SIGINT SIGINT
 for (( passNumber=0; passCount==0 || passNumber<passCount; passNumber++ )); do
 
     # print pass info
@@ -550,10 +652,8 @@ for (( passNumber=0; passCount==0 || passNumber<passCount; passNumber++ )); do
 
     #
     # verify each file by re-generating the hash and comparing it to the hash generated when
-    # we create the file. we first invalidate the page cache to make sure the kernel retrieves
-    # the data from the underlying device
+    # we create the file.
     #
-    clearPageCache
     verifyHashes fileNames hashes
     numMismatchedFilesThisPass=$retVal_1
     execTime=$retVal_2
